@@ -239,10 +239,35 @@ class TypesenseBackend(_Backend):
         }
         if clauses:
             params["filter_by"] = " && ".join(clauses)
-        response = self._request(
-            "GET",
-            f"/collections/{self.definition.name}/documents/search?{urlencode(params)}",
-        )
+        query_string = urlencode(params)
+        if len(query_string.encode("utf-8")) > 3500:
+            # Typesense rejects GET query strings exceeding 4000 bytes.
+            response = self._request(
+                "POST",
+                "/multi_search",
+                body={
+                    "searches": [{"collection": self.definition.name, **params}],
+                },
+            )
+            results = response.get("results") if isinstance(response, dict) else None
+            if (
+                not isinstance(results, list)
+                or len(results) != 1
+                or not isinstance(results[0], dict)
+            ):
+                raise BackendError("Invalid search response")
+            response = results[0]
+            if "error" in response:
+                code = response.get("code")
+                raise BackendError(
+                    "Engine search failed",
+                    retryable=type(code) is int and (code == 429 or code >= 500),
+                )
+        else:
+            response = self._request(
+                "GET",
+                f"/collections/{self.definition.name}/documents/search?{query_string}",
+            )
         try:
             documents = tuple(hit["document"] for hit in response["hits"])
             total = response["found"]

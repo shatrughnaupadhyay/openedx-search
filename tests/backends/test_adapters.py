@@ -110,6 +110,24 @@ class AdapterTests(unittest.TestCase):
             )
         self.assertTrue(transport.calls[-1][2]["ndjson"])
 
+    def test_large_typesense_filters_use_post_body(self):
+        transport = RecordingTransport({"results": [{"hits": [], "found": 0}]})
+        backend = TypesenseBackend(transport, self.definition)
+        values = tuple(f"library_with_long_name_{number}" for number in range(200))
+        backend.search(SearchQuery(filters=(FilterTerm("library_id", values),)))
+        method, path, options = transport.calls[0]
+        self.assertEqual((method, path), ("POST", "/multi_search"))
+        self.assertEqual(options["body"]["searches"][0]["collection"], "library-test")
+        self.assertIn(values[-1], options["body"]["searches"][0]["filter_by"])
+
+    def test_large_typesense_search_error_is_sanitized(self):
+        transport = RecordingTransport({"results": [{"error": "private", "code": 503}]})
+        backend = TypesenseBackend(transport, self.definition)
+        values = tuple(f"library_with_long_name_{number}" for number in range(200))
+        with self.assertRaisesRegex(BackendError, "^Engine search failed$") as raised:
+            backend.search(SearchQuery(filters=(FilterTerm("library_id", values),)))
+        self.assertTrue(raised.exception.retryable)
+
     def test_bad_document_batch_has_no_side_effects(self):
         transport = RecordingTransport({})
         for docs in (

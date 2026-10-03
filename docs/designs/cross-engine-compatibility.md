@@ -27,7 +27,9 @@ on both engines. This avoids silently broadening authorization constraints.
 It is deliberately restrictive until real-engine escaping cases are verified.
 
 `SearchQuery` has one-based pages and a shared 1..250 page-size bound. Meilisearch
-translates to offset/limit; Typesense uses page/per_page. Search relevance,
+translates to offset/limit; Typesense uses page/per_page. Large Typesense queries
+use POST /multi_search to avoid its GET query-string limit; per-search errors
+are checked even in an HTTP-success envelope. Search relevance,
 tokenization and deep result-window ceilings remain engine-specific. Meilisearch
 estimated counts are explicitly marked inexact. Typesense cutoffs raise a retryable
 failure rather than masquerade as complete results.
@@ -57,7 +59,7 @@ credentials, queue orchestration or Django/MFE integration. It makes no full
 Studio parity claim. Settings are fixed at Typesense collection creation; its
 `configure_index()` returns a completed receipt and is not schema reconciliation.
 
-The focused suite passed 18 tests, including live Meilisearch 1.36.0 and Typesense
+The focused suite passed 20 tests, including live Meilisearch 1.36.0 and Typesense
 30.2. Live cases verify exact filters, pagination across 251 documents, full
 replacement with field removal, task completion, and HTTP-success import errors.
 Each case creates and removes a disposable index/collection. Real-engine CI
