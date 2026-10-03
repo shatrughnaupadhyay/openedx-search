@@ -104,8 +104,15 @@ class BenchmarkTests(unittest.TestCase):
                 Query(("library_1",), **values)
 
     def test_reference_report_is_explicit_and_mutations_converge(self):
-        report = run(ReferenceBackend(), libraries=10, documents_per_library=6,
-                     authorized_libraries=2, iterations=4, warmup=1, page_size=5)
+        report = run(
+            ReferenceBackend(),
+            libraries=10,
+            documents_per_library=6,
+            authorized_libraries=2,
+            iterations=4,
+            warmup=1,
+            page_size=5,
+        )
         self.assertEqual(report["measurement_kind"], "in_memory_reference_only")
         self.assertEqual(report["correctness"]["cases"]["mutation_convergence"]["matched"], 11)
         self.assertEqual(len(report["timings"]["search_ms"]["samples"]), 4)
@@ -118,15 +125,20 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_adapter_translation_and_empty_scope_without_network(self):
         adapter = EngineBackend.__new__(EngineBackend)
-        adapter.api = SimpleNamespace(FilterTerm=lambda field, values: (field, values), SearchQuery=lambda **kwargs: kwargs)
+        adapter.api = SimpleNamespace(
+            FilterTerm=lambda field, values: (field, values), SearchQuery=lambda **kwargs: kwargs
+        )
         adapter.engine = Mock()
         self.assertEqual(adapter.search(Query(())), Result((), 0, True))
         adapter.engine.search.assert_not_called()
         adapter.search(Query(("library_1", "library_10"), "problem", page=3, page_size=250))
-        adapter.engine.search.assert_called_once_with({
-            "filters": (("library_id", ("library_1", "library_10")), ("kind", ("problem",))),
-            "page": 3, "page_size": 250,
-        })
+        adapter.engine.search.assert_called_once_with(
+            {
+                "filters": (("library_id", ("library_1", "library_10")), ("kind", ("problem",))),
+                "page": 3,
+                "page_size": 250,
+            }
+        )
 
     def test_retried_mutation_does_not_duplicate(self):
         changed = dict(self.documents[0], library_id="library_9")
@@ -139,8 +151,17 @@ class BenchmarkTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             output = Path(directory) / "report.json"
             output.write_text('{"correctness": {"status": "passed"}}')
-            arguments = ["benchmark", "--engine", "meilisearch", "--adapter-source", directory,
-                         "--url", "http://localhost:7700", "--output", str(output)]
+            arguments = [
+                "benchmark",
+                "--engine",
+                "meilisearch",
+                "--adapter-source",
+                directory,
+                "--url",
+                "http://localhost:7700",
+                "--output",
+                str(output),
+            ]
             with patch("sys.argv", arguments), self.assertRaisesRegex(ValueError, "adapter-source"):
                 main()
             self.assertFalse(output.exists())
@@ -151,7 +172,11 @@ class BenchmarkTests(unittest.TestCase):
         package.mkdir(parents=True)
         for filename in ("__init__.py", "contracts.py", "transport.py"):
             (package / filename).write_text("# synthetic adapter\n")
-        receipt = lambda **kwargs: SimpleNamespace(complete=False, **kwargs)
+
+        def receipt(**kwargs):
+            """Create an incomplete synthetic task receipt."""
+            return SimpleNamespace(complete=False, **kwargs)
+
         engine = Mock()
         engine.create_index.return_value = SimpleNamespace(complete=True)
         engine.configure_index.return_value = SimpleNamespace(complete=True)
@@ -160,7 +185,8 @@ class BenchmarkTests(unittest.TestCase):
         api = SimpleNamespace(
             __file__=str(package / "__init__.py"),
             IndexDefinition=lambda name, *args: SimpleNamespace(name=name),
-            HTTPTransport=Mock(), MeilisearchBackend=Mock(return_value=engine),
+            HTTPTransport=Mock(),
+            MeilisearchBackend=Mock(return_value=engine),
             WriteReceipt=receipt,
         )
         return api, engine
@@ -176,23 +202,38 @@ class BenchmarkTests(unittest.TestCase):
     def test_explicit_meilisearch_ceiling_uses_transport_and_waits(self):
         with TemporaryDirectory() as directory:
             api, engine = self.fake_adapter(directory, {"taskUid": 35})
-            with patch("benchmarks.library_search.importlib.import_module", return_value=api), patch.object(sys, "path", []):
+            with (
+                patch("benchmarks.library_search.importlib.import_module", return_value=api),
+                patch.object(sys, "path", []),
+            ):
                 backend = EngineBackend("meilisearch", directory, "http://localhost:7700", "disposable", 1, 9006)
             engine.transport.request.assert_called_once_with(
-                "PATCH", "/indexes/disposable/settings",
-                body={"pagination": {"maxTotalHits": 9006}}, engine="meilisearch",
+                "PATCH",
+                "/indexes/disposable/settings",
+                body={"pagination": {"maxTotalHits": 9006}},
+                engine="meilisearch",
             )
             self.assertEqual(engine.check_write.call_args.args[0].task_id, 35)
             self.assertEqual(backend.settings, {"pagination": {"maxTotalHits": 9006}})
-            self.assertEqual([call[0] for call in engine.mock_calls], [
-                "create_index", "configure_index", "transport.request", "check_write",
-            ])
+            self.assertEqual(
+                [call[0] for call in engine.mock_calls],
+                [
+                    "create_index",
+                    "configure_index",
+                    "transport.request",
+                    "check_write",
+                ],
+            )
 
     def test_meilisearch_settings_receipt_is_validated(self):
         for response in ({}, {"taskUid": True}, {"taskUid": -1}, {"taskUid": "35"}):
             with TemporaryDirectory() as directory:
                 api, engine = self.fake_adapter(directory, response)
-                with patch("benchmarks.library_search.importlib.import_module", return_value=api), patch.object(sys, "path", []), self.assertRaisesRegex(ValueError, "receipt"):
+                with (
+                    patch("benchmarks.library_search.importlib.import_module", return_value=api),
+                    patch.object(sys, "path", []),
+                    self.assertRaisesRegex(ValueError, "receipt"),
+                ):
                     EngineBackend("meilisearch", directory, "http://localhost:7700", "disposable", 1, 9006)
                 engine.check_write.assert_not_called()
 
@@ -208,8 +249,15 @@ class BenchmarkTests(unittest.TestCase):
     def test_cli_ceiling_rejected_before_backend_creation(self):
         with TemporaryDirectory() as directory, patch("benchmarks.library_search.EngineBackend") as engine:
             for mode, ceiling in (("typesense", "1000"), ("meilisearch", "0")):
-                arguments = ["benchmark", "--engine", mode, "--meilisearch-max-total-hits", ceiling,
-                             "--output", str(Path(directory) / "report.json")]
+                arguments = [
+                    "benchmark",
+                    "--engine",
+                    mode,
+                    "--meilisearch-max-total-hits",
+                    ceiling,
+                    "--output",
+                    str(Path(directory) / "report.json"),
+                ]
                 with patch("sys.argv", arguments), patch("sys.stderr"), self.assertRaises(SystemExit):
                     main()
             engine.assert_not_called()

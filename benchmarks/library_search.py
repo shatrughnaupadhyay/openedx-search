@@ -1,5 +1,8 @@
 """Reproducible oracle checks and timing; run with python -m benchmarks.library_search."""
 
+# Primitive integer checks deliberately reject boolean limits and receipts.
+# pylint: disable=unidiomatic-typecheck
+
 import argparse
 import hashlib
 import importlib
@@ -28,6 +31,7 @@ class Query:
     page_size: int = 20
 
     def __post_init__(self):
+        """Validate primitive integer pagination bounds."""
         if type(self.page) is not int or self.page < 1:
             raise ValueError("page must be a positive integer")
         if type(self.page_size) is not int or not 1 <= self.page_size <= 250:
@@ -66,8 +70,7 @@ def oracle(documents, query):
     return {
         document["id"]: document
         for document in documents
-        if document["library_id"] in allowed
-        and (query.kind is None or document["kind"] == query.kind)
+        if document["library_id"] in allowed and (query.kind is None or document["kind"] == query.kind)
     }
 
 
@@ -77,6 +80,7 @@ class ReferenceBackend:
     mode = "reference"
 
     def __init__(self):
+        """Initialize an empty reference document store."""
         self.documents = {}
 
     def upsert(self, documents):
@@ -91,8 +95,7 @@ class ReferenceBackend:
             (
                 dict(document)
                 for document in self.documents.values()
-                if document["library_id"] in allowed
-                and (query.kind is None or document["kind"] == query.kind)
+                if document["library_id"] in allowed and (query.kind is None or document["kind"] == query.kind)
             ),
             key=lambda document: document["id"],
         )
@@ -103,7 +106,10 @@ class ReferenceBackend:
 class EngineBackend:
     """Use installed document adapters, with an optional development source path."""
 
+    # Preserve the development adapter's positional configuration interface.
+    # pylint: disable-next=too-many-positional-arguments
     def __init__(self, mode, source, url, index_name, timeout, meilisearch_max_total_hits=None):
+        """Configure the adapter, disposable index and optional retrieval ceiling."""
         if meilisearch_max_total_hits is not None:
             if mode != "meilisearch":
                 raise ValueError("maxTotalHits applies only to Meilisearch")
@@ -140,7 +146,10 @@ class EngineBackend:
         if meilisearch_max_total_hits is not None:
             settings = {"pagination": {"maxTotalHits": meilisearch_max_total_hits}}
             response = self.engine.transport.request(
-                "PATCH", f"/indexes/{definition.name}/settings", body=settings, engine=mode,
+                "PATCH",
+                f"/indexes/{definition.name}/settings",
+                body=settings,
+                engine=mode,
             )
             task_id = response.get("taskUid") if isinstance(response, dict) else None
             if type(task_id) is not int or task_id < 0:
@@ -170,9 +179,13 @@ class EngineBackend:
         filters = [self.api.FilterTerm("library_id", query.libraries)]
         if query.kind is not None:
             filters.append(self.api.FilterTerm("kind", (query.kind,)))
-        return self.engine.search(self.api.SearchQuery(
-            filters=tuple(filters), page=query.page, page_size=query.page_size,
-        ))
+        return self.engine.search(
+            self.api.SearchQuery(
+                filters=tuple(filters),
+                page=query.page,
+                page_size=query.page_size,
+            )
+        )
 
 
 def check_page(result, expected, page_size, seen=None):
@@ -218,8 +231,17 @@ def percentile(samples, percentage):
     return sorted(samples)[max(0, math.ceil(len(samples) * percentage / 100) - 1)]
 
 
-def run(backend, *, libraries=1000, documents_per_library=6, seed=42,
-        authorized_libraries=20, iterations=30, warmup=5, page_size=20):
+def run(
+    backend,
+    *,
+    libraries=1000,
+    documents_per_library=6,
+    seed=42,
+    authorized_libraries=20,
+    iterations=30,
+    warmup=5,
+    page_size=20,
+):
     """Run scoped correctness, repeat-query timings and authorization mutation checks."""
     if not 1 <= authorized_libraries <= libraries or iterations < 1 or warmup < 0:
         raise ValueError("invalid scope or iteration count")
@@ -257,27 +279,53 @@ def run(backend, *, libraries=1000, documents_per_library=6, seed=42,
     current = {document["id"]: document for document in documents}
     current.update({document["id"]: document for document in mutations})
     correctness["mutation_convergence"] = check_all_pages(
-        backend, list(current.values()), Query(scope, page_size=page_size),
+        backend,
+        list(current.values()),
+        Query(scope, page_size=page_size),
     )
     mutation_seconds = time.perf_counter() - started
     return {
         "schema_version": 1,
         "mode": backend.mode,
         "measurement_kind": "in_memory_reference_only" if backend.mode == "reference" else "real_engine_http",
-        "performance_claim": "No real-engine scalability claim" if backend.mode == "reference" else "Client-observed local engine timings; record engine/host metadata before comparison",
+        "performance_claim": (
+            "No real-engine scalability claim"
+            if backend.mode == "reference"
+            else "Client-observed local engine timings; record engine/host metadata before comparison"
+        ),
         "runtime": {"python": platform.python_version(), "platform": platform.platform()},
         "adapter": getattr(backend, "provenance", None),
-        "parameters": {"libraries": libraries, "documents_per_library": documents_per_library,
-                       "documents": len(documents), "seed": seed, "authorized_libraries": authorized_libraries,
-                       "iterations": iterations, "warmup": warmup, "page_size": page_size},
+        "parameters": {
+            "libraries": libraries,
+            "documents_per_library": documents_per_library,
+            "documents": len(documents),
+            "seed": seed,
+            "authorized_libraries": authorized_libraries,
+            "iterations": iterations,
+            "warmup": warmup,
+            "page_size": page_size,
+        },
         "fixture_sha256": fixture_hash,
         "correctness": {
-            "status": "passed", "cases": correctness, "authorization_leaks": 0,
-            "validation_scope": "Explicit exact query filters with backend/admin credentials; no signed-token, DB-grant or ACL-revocation enforcement is verified",
+            "status": "passed",
+            "cases": correctness,
+            "authorization_leaks": 0,
+            "validation_scope": (
+                "Explicit exact query filters with backend/admin credentials; "
+                "no signed-token, DB-grant or ACL-revocation enforcement is verified"
+            ),
         },
-        "timings": {"ingest_seconds": ingest_seconds, "mutation_and_verification_seconds": mutation_seconds,
-                    "search_ms": {"p50": percentile(timings, 50), "p95": percentile(timings, 95),
-                                  "min": min(timings), "max": max(timings), "samples": timings}},
+        "timings": {
+            "ingest_seconds": ingest_seconds,
+            "mutation_and_verification_seconds": mutation_seconds,
+            "search_ms": {
+                "p50": percentile(timings, 50),
+                "p95": percentile(timings, 95),
+                "min": min(timings),
+                "max": max(timings),
+                "samples": timings,
+            },
+        },
     }
 
 
@@ -289,8 +337,11 @@ def main():
     parser.add_argument("--url")
     parser.add_argument("--index-name", default=f"library_benchmark_{time.time_ns()}")
     parser.add_argument("--write-timeout", type=float, default=60)
-    parser.add_argument("--meilisearch-max-total-hits", type=int,
-                        help="Explicit retrieval ceiling for this disposable Meilisearch index only")
+    parser.add_argument(
+        "--meilisearch-max-total-hits",
+        type=int,
+        help="Explicit retrieval ceiling for this disposable Meilisearch index only",
+    )
     parser.add_argument("--libraries", type=int, default=1000)
     parser.add_argument("--documents-per-library", type=int, default=6)
     parser.add_argument("--authorized-libraries", type=int, default=20)
@@ -313,11 +364,24 @@ def main():
             parser.error("real engines require --url and an installed adapter dependency")
         if args.write_timeout <= 0:
             parser.error("write-timeout must be positive")
-        backend = EngineBackend(args.engine, args.adapter_source, args.url, args.index_name,
-                                args.write_timeout, args.meilisearch_max_total_hits)
-    report = run(backend, libraries=args.libraries, documents_per_library=args.documents_per_library,
-                 authorized_libraries=args.authorized_libraries, seed=args.seed,
-                 iterations=args.iterations, warmup=args.warmup, page_size=args.page_size)
+        backend = EngineBackend(
+            args.engine,
+            args.adapter_source,
+            args.url,
+            args.index_name,
+            args.write_timeout,
+            args.meilisearch_max_total_hits,
+        )
+    report = run(
+        backend,
+        libraries=args.libraries,
+        documents_per_library=args.documents_per_library,
+        authorized_libraries=args.authorized_libraries,
+        seed=args.seed,
+        iterations=args.iterations,
+        warmup=args.warmup,
+        page_size=args.page_size,
+    )
     if args.engine != "reference":
         report["index_name"] = args.index_name
         report["engine_version"] = os.environ.get("BENCHMARK_ENGINE_VERSION", "unrecorded")

@@ -86,7 +86,7 @@ Run this benchmark checkout without installing its competing package scaffold:
 ```sh
 uv venv --python 3.12 .venv-benchmark
 uv pip install --python .venv-benchmark/bin/python --no-deps \
-  'git+https://github.com/shatrughnaupadhyay/openedx-search@2babc0d'
+  'git+https://github.com/shatrughnaupadhyay/openedx-search@ad973c6bea8c6dba195bff2961314878c068e09c'
 .venv-benchmark/bin/python -m unittest discover -s tests/benchmarks -v
 # Supply BENCHMARK_ENGINE_API_KEY privately for each disposable engine.
 .venv-benchmark/bin/python -m benchmarks.library_search --engine meilisearch \
