@@ -20,11 +20,10 @@ class LiveEngineTests(unittest.TestCase):
     """Run both engines with explicit test endpoint/key environment variables."""
 
     def _exercise(self, backend_type, prefix):
+        """Check filtering, replacement writes and pagination on a live engine."""
         url, key = os.getenv(prefix + "_TEST_URL"), os.getenv(prefix + "_TEST_KEY")
         if not url or not key:
-            self.skipTest(
-                f"Set {prefix}_TEST_URL and {prefix}_TEST_KEY for a disposable engine"
-            )
+            self.skipTest(f"Set {prefix}_TEST_URL and {prefix}_TEST_KEY for a disposable engine")
         name = "compat_" + uuid.uuid4().hex
         transport = HTTPTransport(url, key)
         backend = backend_type(transport, IndexDefinition(name, ("title",), ("org",)))
@@ -54,45 +53,27 @@ class LiveEngineTests(unittest.TestCase):
                 filters=(FilterTerm("org", ("tenant, (safe)",)),),
                 page_size=250,
             )
+            self.assertEqual([doc["id"] for doc in backend.search(query).documents], ["1"])
             self.assertEqual(
-                [doc["id"] for doc in backend.search(query).documents], ["1"]
-            )
-            self.assertEqual(
-                backend.search(
-                    SearchQuery(filters=(FilterTerm("org", ("absent",)),))
-                ).total,
+                backend.search(SearchQuery(filters=(FilterTerm("org", ("absent",)),))).total,
                 0,
             )
-            finish(
-                backend.upsert(
-                    [{"id": "1", "title": "geometry lesson", "org": "tenant, (safe)"}]
-                )
-            )
+            finish(backend.upsert([{"id": "1", "title": "geometry lesson", "org": "tenant, (safe)"}]))
             self.assertEqual(
-                [
-                    doc["id"]
-                    for doc in backend.search(SearchQuery("geometry")).documents
-                ],
+                [doc["id"] for doc in backend.search(SearchQuery("geometry")).documents],
                 ["1"],
             )
             finish(backend.upsert([{"id": "1", "title": "geometry lesson"}]))
             self.assertEqual(backend.search(query).total, 0)
-            self.assertNotIn(
-                "org", backend.search(SearchQuery("geometry")).documents[0]
-            )
+            self.assertNotIn("org", backend.search(SearchQuery("geometry")).documents[0])
             finish(
                 backend.upsert(
-                    [
-                        {"id": f"page_{number}", "title": "pagination", "org": "pages"}
-                        for number in range(251)
-                    ]
+                    [{"id": f"page_{number}", "title": "pagination", "org": "pages"} for number in range(251)]
                 )
             )
             scope = (FilterTerm("org", ("pages",)),)
             first = backend.search(SearchQuery(filters=scope, page_size=250)).documents
-            second = backend.search(
-                SearchQuery(filters=scope, page_size=250, page=2)
-            ).documents
+            second = backend.search(SearchQuery(filters=scope, page_size=250, page=2)).documents
             self.assertEqual((len(first), len(second)), (250, 1))
             self.assertEqual(len({doc["id"] for doc in first + second}), 251)
         finally:

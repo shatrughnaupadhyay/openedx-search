@@ -1,5 +1,8 @@
 """Small HTTP transport; credentials and response bodies never enter errors."""
 
+# Response limits accept primitive integers only, excluding booleans.
+# pylint: disable=unidiomatic-typecheck
+
 import json
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -11,7 +14,8 @@ from .contracts import BackendError
 class _NoRedirect(HTTPRedirectHandler):
     """Prevent authentication headers being forwarded to another origin."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    # urllib requires this override signature.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # pylint: disable=too-many-positional-arguments
         return None
 
 
@@ -26,6 +30,7 @@ class HTTPTransport:
         timeout: float = 10,
         max_response_bytes: int = 16 * 1024 * 1024,
     ):
+        """Configure one engine endpoint and bounded request/response limits."""
         parts = urlsplit(base_url)
         if parts.scheme not in ("http", "https") or not parts.netloc or parts.username:
             raise ValueError("Expected an HTTP(S) engine URL without credentials")
@@ -50,14 +55,8 @@ class HTTPTransport:
             headers["Authorization"] = f"Bearer {self.api_key}"
         else:
             headers["X-TYPESENSE-API-KEY"] = self.api_key
-        data = (
-            body.encode("utf-8")
-            if ndjson
-            else (json.dumps(body).encode("utf-8") if body is not None else None)
-        )
-        request = Request(
-            self.base_url + path, data=data, headers=headers, method=method
-        )
+        data = body.encode("utf-8") if ndjson else (json.dumps(body).encode("utf-8") if body is not None else None)
+        request = Request(self.base_url + path, data=data, headers=headers, method=method)
         try:
             with self.opener.open(request, timeout=self.timeout) as response:
                 content = response.read(self.max_response_bytes + 1)
@@ -75,10 +74,6 @@ class HTTPTransport:
         except (URLError, TimeoutError, OSError):
             raise BackendError("Engine transport failure", retryable=True) from None
         try:
-            return (
-                [json.loads(line) for line in raw.splitlines()]
-                if ndjson
-                else json.loads(raw)
-            )
+            return [json.loads(line) for line in raw.splitlines()] if ndjson else json.loads(raw)
         except (ValueError, UnicodeError):
             raise BackendError("Invalid engine response") from None

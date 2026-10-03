@@ -1,14 +1,15 @@
 """Narrow, typed document-search contracts with explicit engine limits."""
 
+# Pagination accepts primitive integers only, excluding booleans.
+# pylint: disable=unidiomatic-typecheck
+
 import re
 from dataclasses import dataclass
 
 
 def validate_field(value: str) -> None:
     """Reject syntax rather than interpolating arbitrary field expressions."""
-    if not isinstance(value, str) or not re.fullmatch(
-        r"[A-Za-z_][A-Za-z0-9_.]*", value
-    ):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", value):
         raise ValueError("Invalid field name")
 
 
@@ -20,17 +21,14 @@ class FilterTerm:
     values: tuple[str, ...]
 
     def __post_init__(self):
+        """Validate field syntax and portable exact filter literals."""
         validate_field(self.field)
         if not self.values:
             raise ValueError("Empty value set would broaden a search")
         for value in self.values:
             # Backticks delimit Typesense literals. Reject unsupported literals
             # consistently on both engines instead of guessing an escape rule.
-            if (
-                not isinstance(value, str)
-                or not value
-                or any(ord(char) < 32 or char in "`\\" for char in value)
-            ):
+            if not isinstance(value, str) or not value or any(ord(char) < 32 or char in "`\\" for char in value):
                 raise ValueError("Unsupported exact-filter literal")
 
 
@@ -43,6 +41,7 @@ class IndexDefinition:
     filterable_fields: tuple[str, ...] = ()
 
     def __post_init__(self):
+        """Validate the index identifier and declared flat schema fields."""
         if not re.fullmatch(r"[A-Za-z0-9_-]+", self.name):
             raise ValueError("Invalid index name")
         if not self.searchable_fields:
@@ -50,9 +49,7 @@ class IndexDefinition:
         for field in self.searchable_fields + self.filterable_fields:
             validate_field(field)
             if "." in field:
-                raise ValueError(
-                    "Nested schema fields are outside this initial contract"
-                )
+                raise ValueError("Nested schema fields are outside this initial contract")
 
 
 @dataclass(frozen=True)
@@ -65,6 +62,7 @@ class SearchQuery:
     page_size: int = 20
 
     def __post_init__(self):
+        """Reject invalid page bounds and nonstring query text."""
         if type(self.page) is not int or self.page < 1:
             raise ValueError("page must be a positive integer")
         if type(self.page_size) is not int or not 1 <= self.page_size <= 250:
@@ -94,5 +92,6 @@ class BackendError(RuntimeError):
     """Sanitized engine/transport failure, with explicit retry guidance."""
 
     def __init__(self, message: str, *, retryable: bool = False):
+        """Record a sanitized message and explicit retryability."""
         super().__init__(message)
         self.retryable = retryable

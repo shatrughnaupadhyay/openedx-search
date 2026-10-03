@@ -1,17 +1,13 @@
 """Initial Meilisearch/Typesense document adapter slice, independent of Django."""
 
+# Engine JSON integers must exclude booleans and nonprimitive numeric types.
+# pylint: disable=unidiomatic-typecheck
+
 import json
 import re
 from urllib.parse import urlencode
 
-from .contracts import (
-    BackendError,
-    FilterTerm,
-    IndexDefinition,
-    SearchQuery,
-    SearchResult,
-    WriteReceipt,
-)
+from .contracts import BackendError, FilterTerm, IndexDefinition, SearchQuery, SearchResult, WriteReceipt
 from .transport import HTTPTransport
 
 __all__ = [
@@ -30,6 +26,8 @@ __all__ = [
 class _Backend:
     """Shared preflight validation; never accept caller-provided filter syntax."""
 
+    engine: str
+
     def __init__(self, transport: HTTPTransport, definition: IndexDefinition):
         self.transport = transport
         self.definition = definition
@@ -43,18 +41,15 @@ class _Backend:
                 raise ValueError("Filter field is not declared filterable")
 
     def _documents(self, documents):
+        """Validate a bounded batch against the declared flat string schema."""
         documents = list(documents)
         if not 1 <= len(documents) <= 1000:
             raise ValueError("A write batch must contain 1 to 1000 documents")
-        fields = set(
-            self.definition.searchable_fields + self.definition.filterable_fields
-        ) | {"id"}
+        fields = set(self.definition.searchable_fields + self.definition.filterable_fields) | {"id"}
         for document in documents:
             if not isinstance(document, dict) or set(document) - fields:
                 raise ValueError("Document has undeclared fields")
-            if not isinstance(document.get("id"), str) or not re.fullmatch(
-                r"[A-Za-z0-9_-]+", document["id"]
-            ):
+            if not isinstance(document.get("id"), str) or not re.fullmatch(r"[A-Za-z0-9_-]+", document["id"]):
                 raise ValueError("Document requires an engine-portable string id")
             if any(not isinstance(value, str) for value in document.values()):
                 raise ValueError("Initial schema accepts only string values")
@@ -67,6 +62,7 @@ class MeilisearchBackend(_Backend):
     engine = "meilisearch"
 
     def _receipt(self, response):
+        """Parse a nonnegative primitive integer task identifier."""
         try:
             task_id = response["taskUid"]
             if type(task_id) is not int or task_id < 0:
@@ -131,12 +127,7 @@ class MeilisearchBackend(_Backend):
         """Search with escaped structured exact filters and offset pagination."""
         self._validate_query(query)
         clauses = [
-            "("
-            + " OR ".join(
-                f"{term.field} = {json.dumps(value, ensure_ascii=False)}"
-                for value in term.values
-            )
-            + ")"
+            "(" + " OR ".join(f"{term.field} = {json.dumps(value, ensure_ascii=False)}" for value in term.values) + ")"
             for term in query.filters
         ]
         body = {
@@ -146,17 +137,11 @@ class MeilisearchBackend(_Backend):
         }
         if clauses:
             body["filter"] = " AND ".join(clauses)
-        response = self._request(
-            "POST", f"/indexes/{self.definition.name}/search", body=body
-        )
+        response = self._request("POST", f"/indexes/{self.definition.name}/search", body=body)
         try:
             documents = tuple(response["hits"])
             total = response["estimatedTotalHits"]
-            if (
-                type(total) is not int
-                or total < 0
-                or any(not isinstance(doc, dict) for doc in documents)
-            ):
+            if type(total) is not int or total < 0 or any(not isinstance(doc, dict) for doc in documents):
                 raise ValueError
             return SearchResult(documents, total, False)
         except (KeyError, TypeError, ValueError):
@@ -170,9 +155,7 @@ class TypesenseBackend(_Backend):
 
     def create_index(self):
         """Create a string schema with explicit searchable and filterable fields."""
-        fields = dict.fromkeys(
-            self.definition.searchable_fields + self.definition.filterable_fields
-        )
+        fields = dict.fromkeys(self.definition.searchable_fields + self.definition.filterable_fields)
         fields.pop("id", None)  # Typesense provides the reserved document id itself.
         self._request(
             "POST",
@@ -193,7 +176,7 @@ class TypesenseBackend(_Backend):
         return WriteReceipt(complete=True)
 
     def configure_index(self):
-        """The initial contract fixes settings at Typesense collection creation."""
+        """Retain the settings fixed at Typesense collection creation."""
         return WriteReceipt(complete=True)
 
     def upsert(self, documents):
@@ -208,17 +191,14 @@ class TypesenseBackend(_Backend):
         if (
             not isinstance(results, list)
             or len(results) != len(documents)
-            or any(
-                not isinstance(result, dict) or result.get("success") is not True
-                for result in results
-            )
+            or any(not isinstance(result, dict) or result.get("success") is not True for result in results)
         ):
             # Some documents may already be committed. Worker retries must be upserts.
             raise BackendError("Document import partially failed")
         return WriteReceipt(complete=True)
 
     def check_write(self, receipt):
-        """Synchronous receipts need no network round-trip."""
+        """Return a completed synchronous receipt without a network request."""
         if not receipt.complete:
             raise ValueError("Typesense receipt must already be complete")
         return receipt
@@ -226,10 +206,7 @@ class TypesenseBackend(_Backend):
     def search(self, query: SearchQuery):
         """Render exact backtick literals and normalize document envelopes."""
         self._validate_query(query)
-        clauses = [
-            term.field + ":=[" + ",".join(f"`{value}`" for value in term.values) + "]"
-            for term in query.filters
-        ]
+        clauses = [term.field + ":=[" + ",".join(f"`{value}`" for value in term.values) + "]" for term in query.filters]
         params = {
             "q": query.text or "*",
             "query_by": ",".join(self.definition.searchable_fields),
@@ -250,11 +227,7 @@ class TypesenseBackend(_Backend):
                 },
             )
             results = response.get("results") if isinstance(response, dict) else None
-            if (
-                not isinstance(results, list)
-                or len(results) != 1
-                or not isinstance(results[0], dict)
-            ):
+            if not isinstance(results, list) or len(results) != 1 or not isinstance(results[0], dict):
                 raise BackendError("Invalid search response")
             response = results[0]
             if "error" in response:
@@ -271,11 +244,7 @@ class TypesenseBackend(_Backend):
         try:
             documents = tuple(hit["document"] for hit in response["hits"])
             total = response["found"]
-            if (
-                type(total) is not int
-                or total < 0
-                or any(not isinstance(doc, dict) for doc in documents)
-            ):
+            if type(total) is not int or total < 0 or any(not isinstance(doc, dict) for doc in documents):
                 raise ValueError
             if response.get("search_cutoff", False):
                 raise BackendError("Engine search cutoff", retryable=True)
